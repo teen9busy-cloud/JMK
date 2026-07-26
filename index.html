@@ -335,6 +335,17 @@ function buildRank(q,O,body){
     });
   }
   wrap._refresh=refresh; body.appendChild(wrap); body._rankToggle=toggle;
+  // 재접속 복원용: 저장된 rank 배열([{rank,code}])로 picks 재구성 후 화면 반영
+  wrap._restore=function(savedRank){
+    picks.length=0;
+    (savedRank||[]).slice().sort((a,b)=>a.rank-b.rank).forEach(rk=>{
+      const o=(META.O[q.id]||[]).find(x=>x.code===rk.code);
+      if(o) picks[rk.rank-1]=o;
+    });
+    for(let i=picks.length-1;i>=0;i--) if(!picks[i]) picks.splice(i,1);
+    A[q.code].rank=picks.map((p,i)=>({rank:i+1,code:p.code}));
+    refresh();
+  };
 }
 // ---- text ----
 function buildText(q,body){
@@ -432,9 +443,7 @@ function registerConditional(q,card){
 // ============ 응답 이벤트 ============
 function onAnswer(q,immediate=true){
   const card=document.getElementById('q_'+q.code); if(card) card.classList.remove('missing');
-  // 이 문항이 다른 조건부 문항의 소스라면 갱신
-  Object.entries(condControllers).forEach(([k,fn])=>{ if(k.endsWith(q.code)||k===('show_Q15')) {} });
-  // 소스가 Q14/Q28인 경우 관련 컨트롤러 호출
+  // 소스가 Q14/Q28인 경우 관련 조건부 문항 갱신
   if(q.code==='Q14' && condControllers['show_Q15']) condControllers['show_Q15']();
   if(q.code==='Q28' && condControllers['Q29']) condControllers['Q29']();
   recalcProgress();
@@ -450,6 +459,9 @@ function recalcProgress(){
   els.pct.textContent=pct+'%'; els.bar.style.width=pct+'%';
 }
 function isAnswered(code){
+  // 조건부로 숨겨진 문항(예: Q14 미응답 시 Q15)은 필수 검증에서 제외
+  const card=document.getElementById('q_'+code);
+  if(card && card.classList.contains('conditional-hidden')) return true;
   const q=META.Q[code]; if(!q) return false; const v=A[code];
   if(q.type==='single') return !!(v&&v.opt);
   if(q.type==='multi'){const min=q.config?.min||1;return !!(v&&v.opts&&v.opts.length>=min);}
@@ -541,29 +553,44 @@ async function restoreDraft(){
   reflectAll();
 }
 // 복원값을 화면에 반영
-function applySingle(q,opt,text){}
 function reflectAll(){
-  // 라디오/체크/매트릭스/랭크 UI 재적용: 간단히 각 카드 다시 그리기보다, 값 기반 DOM 반영
   for(const code in META.Q){
     const q=META.Q[code], v=A[code]; if(!v) continue;
     // single
-    if(q.type==='single'&&v.opt){const r=document.querySelector(`input[name="${code}"][value="${v.opt}"]`);
-      if(r){r.checked=true;r.dispatchEvent(new Event('change'));}}
-    if(q.type==='multi'&&v.opts){v.opts.forEach(oc=>{const c=document.querySelector(`#q_${code} input[value="${oc}"]`);
-      if(c){c.checked=true;c.closest('.opt')?.classList.add('sel');}});}
-    if(q.type==='rank'&&v.rank){const body=document.querySelector('#q_'+code+' .qbody');
-      // rk 버튼 상태 반영
-      v.rank.forEach(rk=>{const btn=document.querySelector(`#q_${code} .rk[data-c]`);});
-      // 간단 반영: refresh 재호출
-      const wrap=document.querySelector('#q_'+code+' .rankopts'); if(wrap&&wrap._refresh){/* picks 내부상태 필요 */}}
-    if(q.type==='matrix_scale'){const rows=META.R[q.id]||[],sc=META.SC[q.id]||[];
+    if(q.type==='single'&&v.opt){
+      const r=document.querySelector(`input[name="${code}"][value="${v.opt}"]`);
+      if(r){r.checked=true;r.dispatchEvent(new Event('change'));}
+    }
+    // multi
+    if(q.type==='multi'&&v.opts){
+      v.opts.forEach(oc=>{const c=document.querySelector(`#q_${code} input[value="${oc}"]`);
+        if(c){c.checked=true;const opt=c.closest('.opt');opt?.classList.add('sel');
+          const ei=opt?.querySelector('.etc-in');if(ei)ei.classList.add('show');}});
+    }
+    // rank — buildRank가 노출한 _restore 로 picks 재구성 + 화면 반영
+    if(q.type==='rank'&&v.rank){
+      const wrap=document.querySelector('#q_'+code+' .rankopts');
+      if(wrap&&wrap._restore) wrap._restore(v.rank);
+    }
+    // matrix_scale — 척도 라디오 + 우선순위 버튼
+    if(q.type==='matrix_scale'){
+      const rows=META.R[q.id]||[],sc=META.SC[q.id]||[];
       rows.forEach(r=>sc.forEach(s=>{const val=A[`${code}.m.${r.code}.${s.code}`];
         if(val){const inp=document.getElementById(`${code}_${r.code}_${s.code}_${val}`);if(inp)inp.checked=true;}}));
       const rk=A[`${code}.rank`]||{};const tb=document.querySelector('#q_'+code+' tbody');
-      if(tb)[...tb.querySelectorAll('.rankbtn')].forEach(g=>{g.querySelector('.b1').className='b1'+(rk[g._code]===1?' r1':'');
-        g.querySelector('.b2').className='b2'+(rk[g._code]===2?' r2':'');});}
+      if(tb)[...tb.querySelectorAll('.rankbtn')].forEach(g=>{
+        g.querySelector('.b1').className='b1'+(rk[g._code]===1?' r1':'');
+        g.querySelector('.b2').className='b2'+(rk[g._code]===2?' r2':'');});
+    }
+    // 기타(___) 직접입력 텍스트 복원 (single/multi/rank 공통)
+    if(A[code+'.text']){
+      const ei=document.querySelector(`#q_${code} .etc-in`);
+      if(ei){ei.value=A[code+'.text'];ei.classList.add('show');
+        // rank의 경우 부모 rankopt에도 표시 유지
+        ei.closest('.opt')?.classList.add('sel');}
+    }
   }
-  // 조건부 재계산
+  // 조건부 재계산 (Q29 matrix_check_group 은 여기서 A값 기반으로 다시 그려짐)
   Object.values(condControllers).forEach(fn=>fn());
   recalcProgress();
 }
