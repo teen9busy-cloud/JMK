@@ -539,7 +539,7 @@ async function restoreDraft(){
   // answers[] -> A 복원 (렌더 후 반영)
   ans.forEach(a=>{
     const q=META.Q[a.q]; if(!q) return;
-    if(q.type==='single'){A[a.q]={opt:a.opt}; if(a.text)A[a.q+'.text']=a.text; applySingle(q,a.opt,a.text);}
+    if(q.type==='single'){A[a.q]={opt:a.opt}; if(a.text)A[a.q+'.text']=a.text;}
     else if(q.type==='multi'){(A[a.q]??={opts:[]}); if(a.opt){A[a.q].opts.push(a.opt);} if(a.text)A[a.q+'.text']=a.text;}
     else if(q.type==='rank'){(A[a.q]??={rank:[]}); if(a.rank)A[a.q].rank.push({rank:a.rank,code:a.opt}); if(a.text)A[a.q+'.text']=a.text;}
     else if(q.type==='text'){A[a.q]={text:a.text};}
