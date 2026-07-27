@@ -66,6 +66,13 @@
   .rankopts{display:flex; flex-direction:column; gap:8px;}
   .rankopts.grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(360px, 1fr)); gap:10px; align-items:stretch;}
   .rankopts.grid .rankopt{align-items:center;}
+  /* 드롭다운형 순위 (65개 등 많은 선택지) */
+  .dropdown-rank{display:flex; flex-direction:column; gap:12px; max-width:900px;}
+  .dr-row{display:flex; align-items:center; gap:14px;}
+  .dr-label{min-width:56px; font-weight:700; color:var(--green); font-size:16px;}
+  .dr-select{flex:1; padding:12px 14px; border:1.5px solid var(--line); border-radius:9px;
+             font-family:inherit; font-size:16px; background:#fff; cursor:pointer;}
+  .dr-select:focus{outline:none; border-color:var(--green-2);}
   .rankopt{display:flex; align-items:center; gap:13px; padding:11px 16px; border:1.5px solid var(--line);
            border-radius:9px; transition:.12s; font-size:15.5px;}
   .rankopt .txt{flex:1;}
@@ -188,6 +195,18 @@ async function load(){
   META.qsBySec={}; qs.forEach(q=>(META.qsBySec[q.section_id]??=[]).push(q));
   // 섹션 ord → 문항 ord 순으로 정렬 (누락 문항 스크롤 순서 보장)
   Object.values(META.qsBySec).forEach(arr=>arr.sort((a,b)=>a.ord-b.ord));
+
+  // S14-T1 드롭다운: 옵션의 영역(group)을, 같은 라벨의 파트14 매트릭스 문항 제목에서 유도
+  const t1=META.Q['S14-T1'];
+  if(t1 && t1.config?.widget==='dropdown'){
+    const labelToArea={};
+    (META.qsBySec[t1.section_id]||[]).forEach(mq=>{
+      if(mq.type==='matrix_scale'){const area=(mq.title||'').replace(/^\d+\.\s*/,'');
+        (META.R[mq.id]||[]).forEach(r=>{labelToArea[r.label]=area;});}
+    });
+    (META.O[t1.id]||[]).forEach(o=>{o.group=labelToArea[o.label]||'기타';});
+  }
+
   requiredCodes=[];
   secs.forEach(sec=>{(META.qsBySec[sec.id]||[]).forEach(q=>{if(q.required)requiredCodes.push(q.code);});});
 
@@ -237,7 +256,7 @@ function buildQuestion(q){
   const R=META.R[q.id]||[], O=META.O[q.id]||[], SC=META.SC[q.id]||[];
   if(q.type==='single')            buildSingle(q,O,body);
   else if(q.type==='multi')        buildMulti(q,O,body);
-  else if(q.type==='rank')         buildRank(q,O,body);
+  else if(q.type==='rank')         (q.config?.widget==='dropdown'?buildRankDropdown:buildRank)(q,O,body);
   else if(q.type==='text')         buildText(q,body);
   else if(q.type==='matrix_scale') buildMatrixScale(q,R,SC,body);
   else if(q.type==='matrix_check_group') buildCheckGroup(q,R,body);
@@ -345,6 +364,53 @@ function buildRank(q,O,body){
     for(let i=picks.length-1;i>=0;i--) if(!picks[i]) picks.splice(i,1);
     A[q.code].rank=picks.map((p,i)=>({rank:i+1,code:p.code}));
     refresh();
+  };
+}
+// ---- rank (드롭다운형: 65개처럼 많은 선택지, 영역별 그룹) ----
+function buildRankDropdown(q,O,body){
+  const ranks=q.config?.ranks||2;
+  body.appendChild(node('div','hint','',`아래에서 우선순위에 따라 ${ranks}개를 선택해 주십시오.`));
+  A[q.code]={rank:[]};
+  const slots=new Array(ranks).fill(null); // 순위별 raw 슬롯 (인덱스 안정)
+  const box=node('div','dropdown-rank');
+  const selects=[];
+  // 영역(group)별로 optgroup 구성
+  const groups=[];const gmap={};
+  O.forEach(o=>{const g=o.group||'기타';if(!gmap[g]){gmap[g]=[];groups.push(g);}gmap[g].push(o);});
+  function buildOptions(sel,excludeCode){
+    sel.innerHTML='<option value="">— 선택하세요 —</option>';
+    groups.forEach(g=>{
+      const og=document.createElement('optgroup');og.label=g;
+      gmap[g].forEach(o=>{
+        const opt=document.createElement('option');opt.value=o.code;opt.textContent=o.label;
+        if(o.code===excludeCode) opt.disabled=true; // 다른 순위에서 이미 고른 건 비활성
+        og.appendChild(opt);
+      });
+      sel.appendChild(og);
+    });
+  }
+  for(let r=1;r<=ranks;r++){
+    const rowEl=node('div','dr-row');
+    rowEl.appendChild(node('span','dr-label','',`${r}순위`));
+    const sel=node('select','dr-select');sel._rank=r;
+    sel.onchange=()=>{
+      slots[r-1]=sel.value?{rank:r,code:sel.value}:null;
+      A[q.code].rank=slots.filter(Boolean).map((s,i)=>({rank:i+1,code:s.code}));
+      // 상대 드롭다운에서 방금 고른 항목 비활성화 갱신
+      selects.forEach(other=>{if(other!==sel){const ov=other.value;
+        buildOptions(other, sel.value||null); other.value=ov;}});
+      onAnswer(q);
+    };
+    rowEl.appendChild(sel);box.appendChild(rowEl);selects.push(sel);
+  }
+  selects.forEach((s,i)=>buildOptions(s, null));
+  body.appendChild(box);
+  // 재접속 복원
+  box._restore=function(savedRank){
+    (savedRank||[]).forEach(rk=>{const s=selects[rk.rank-1];if(s){s.value=rk.code;slots[rk.rank-1]={rank:rk.rank,code:rk.code};}});
+    A[q.code].rank=slots.filter(Boolean).map((s,i)=>({rank:i+1,code:s.code}));
+    selects.forEach((s,i)=>{const other=selects[1-i];const ex=other?other.value:null;
+      const cur=s.value;buildOptions(s,ex||null);s.value=cur;});
   };
 }
 // ---- text ----
@@ -567,10 +633,12 @@ function reflectAll(){
         if(c){c.checked=true;const opt=c.closest('.opt');opt?.classList.add('sel');
           const ei=opt?.querySelector('.etc-in');if(ei)ei.classList.add('show');}});
     }
-    // rank — buildRank가 노출한 _restore 로 picks 재구성 + 화면 반영
+    // rank — 표준(.rankopts) 또는 드롭다운(.dropdown-rank) 복원
     if(q.type==='rank'&&v.rank){
-      const wrap=document.querySelector('#q_'+code+' .rankopts');
-      if(wrap&&wrap._restore) wrap._restore(v.rank);
+      const w1=document.querySelector('#q_'+code+' .rankopts');
+      const w2=document.querySelector('#q_'+code+' .dropdown-rank');
+      if(w1&&w1._restore) w1._restore(v.rank);
+      else if(w2&&w2._restore) w2._restore(v.rank);
     }
     // matrix_scale — 척도 라디오 + 우선순위 버튼
     if(q.type==='matrix_scale'){
