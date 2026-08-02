@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>전문가조사 관리 대시보드</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{--bg:#f4f7f6;--card:#fff;--ink:#1f2a26;--muted:#6b7a74;--green:#1b5e20;
+        --green-2:#2e7d32;--green-soft:#e6efe7;--line:#d9e2de;--accent:#1b5e20;--bar:#66a06b;}
+  *{box-sizing:border-box}
+  body{font-family:'Malgun Gothic','맑은 고딕',sans-serif;background:var(--bg);color:var(--ink);
+       margin:0;font-size:15px;line-height:1.6;}
+  header{background:var(--green);color:#fff;padding:18px 28px;display:flex;align-items:center;gap:16px;}
+  header h1{margin:0;font-size:19px;font-weight:700;}
+  header .sub{font-size:13px;opacity:.85;}
+  .wrap{max-width:1300px;margin:0 auto;padding:0 24px 60px;}
+  /* 요약 카드 */
+  .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;}
+  .stat .n{font-size:30px;font-weight:800;color:var(--green);}
+  .stat .l{font-size:13px;color:var(--muted);margin-top:2px;}
+  /* 탭 */
+  .tabs{display:flex;gap:6px;border-bottom:2px solid var(--line);margin:10px 0 0;flex-wrap:wrap;}
+  .tab{padding:11px 18px;cursor:pointer;font-weight:600;font-size:14.5px;color:var(--muted);
+       border:none;background:none;border-bottom:3px solid transparent;margin-bottom:-2px;}
+  .tab.active{color:var(--green);border-bottom-color:var(--green);}
+  .panel{display:none;padding:22px 0;}
+  .panel.active{display:block;}
+  /* 공통 */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:16px 0;}
+  h2{font-size:16px;color:var(--green);margin:0 0 12px;}
+  h3{font-size:14.5px;color:var(--ink);margin:22px 0 8px;border-left:3px solid var(--green);padding-left:9px;}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;}
+  thead th{background:var(--green-soft);color:var(--green);font-weight:700;}
+  td.num{text-align:center;}
+  .barcell{position:relative;min-width:120px;}
+  .barcell .fill{position:absolute;left:0;top:0;bottom:0;background:var(--green-soft);z-index:0;}
+  .barcell span{position:relative;z-index:1;padding-left:4px;}
+  .btn{background:var(--green);color:#fff;border:none;border-radius:8px;padding:10px 18px;
+       font-size:14px;font-weight:600;cursor:pointer;}
+  .btn:hover{background:var(--green-2);}
+  .btn.ghost{background:#fff;color:var(--green);border:1.5px solid var(--green);}
+  .muted{color:var(--muted);}
+  .loading{padding:60px;text-align:center;color:var(--muted);}
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;}
+  select,input[type=search]{padding:8px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .pill{display:inline-block;background:var(--green-soft);color:var(--green);border-radius:20px;padding:2px 10px;font-size:12px;margin-left:6px;}
+  .open-item{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:8px 0;background:#fbfdfc;}
+  .open-item .meta{font-size:12px;color:var(--muted);margin-bottom:4px;}
+  .refresh{margin-left:auto;font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline;}
+</style>
+</head>
+<body>
+<header>
+  <h1>전문가조사 관리 대시보드</h1>
+  <span class="sub">제3차 부산광역시 아동친화도시 기본계획</span>
+  <span class="refresh" id="refresh" style="color:#cfe">↻ 새로고침</span>
+</header>
+<div class="wrap">
+  <div class="summary" id="summary"></div>
+  <div class="toolbar">
+    <button class="btn ghost" id="xlsx">⬇ 엑셀 전체 다운로드</button>
+    <span class="muted" id="updated"></span>
+  </div>
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-p="respondents">① 응답자 현황</button>
+    <button class="tab" data-p="aggregate">② 문항별 집계</button>
+    <button class="tab" data-p="individual">③ 개별 응답</button>
+    <button class="tab" data-p="opentext">④ 서술형 응답</button>
+  </div>
+  <div id="content"><div class="loading">데이터를 불러오는 중…</div></div>
+</div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+const SUPABASE_URL='https://wjuhtqhjkgotioaikyzd.supabase.co';
+const SUPABASE_KEY='sb_publishable__HifIlzfrOHbrIiEpFtd1Q_dY4Om0Ej';
+const SURVEY_CODE='busan_cfc3_expert_2026';
+const sb=createClient(SUPABASE_URL,SUPABASE_KEY);
+
+const content=document.getElementById('content');
+let DATA={}; // 정의 + 응답
+
+async function loadAll(){
+  content.innerHTML='<div class="loading">데이터를 불러오는 중…</div>';
+  const {data:survey}=await sb.from('surveys').select('*').eq('code',SURVEY_CODE).single();
+  const {data:secs}=await sb.from('sections').select('*').eq('survey_id',survey.id).order('ord');
+  const secIds=secs.map(s=>s.id);
+  const {data:qs}=await sb.from('questions').select('*').in('section_id',secIds).order('ord');
+  const qIds=qs.map(q=>q.id);
+  const [{data:opts},{data:rows},{data:scales},{data:resps},{data:flat}]=await Promise.all([
+    sb.from('options').select('*').in('question_id',qIds).order('ord'),
+    sb.from('matrix_rows').select('*').in('question_id',qIds).order('ord'),
+    sb.from('scales').select('*').in('question_id',qIds).order('ord'),
+    sb.from('responses').select('*').eq('survey_id',survey.id).order('started_at'),
+    sb.from('v_answers_flat').select('*'),
+  ]);
+  DATA={survey,secs,qs,opts:opts||[],rows:rows||[],scales:scales||[],
+        resps:resps||[],flat:flat||[]};
+  // 인덱스
+  DATA.qByCode={}; qs.forEach(q=>DATA.qByCode[q.code]=q);
+  DATA.qById={}; qs.forEach(q=>DATA.qById[q.id]=q);
+  DATA.qsBySec={}; qs.forEach(q=>(DATA.qsBySec[q.section_id]??=[]).push(q));
+  Object.values(DATA.qsBySec).forEach(a=>a.sort((x,y)=>x.ord-y.ord));
+  DATA.optByQ={}; (opts||[]).forEach(o=>(DATA.optByQ[o.question_id]??=[]).push(o));
+  DATA.rowByQ={}; (rows||[]).forEach(r=>(DATA.rowByQ[r.question_id]??=[]).push(r));
+  DATA.scByQ={}; (scales||[]).forEach(s=>(DATA.scByQ[s.question_id]??=[]).push(s));
+
+  renderSummary();
+  document.getElementById('updated').textContent='업데이트: '+new Date().toLocaleString('ko-KR');
+  showPanel(currentPanel);
+}
+
+function renderSummary(){
+  const total=DATA.resps.length;
+  const submitted=DATA.resps.filter(r=>r.status==='submitted').length;
+  const draft=total-submitted;
+  const el=document.getElementById('summary');
+  el.innerHTML=`
+    <div class="stat"><div class="n">${total}</div><div class="l">전체 응답(작성 시작)</div></div>
+    <div class="stat"><div class="n">${submitted}</div><div class="l">제출 완료</div></div>
+    <div class="stat"><div class="n">${draft}</div><div class="l">작성 중(미제출)</div></div>
+    <div class="stat"><div class="n">${DATA.qs.length}</div><div class="l">문항 수</div></div>`;
+}
+
+/* ===== 탭 전환 ===== */
+let currentPanel='respondents';
+document.getElementById('tabs').addEventListener('click',e=>{
+  const b=e.target.closest('.tab'); if(!b)return;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  b.classList.add('active'); currentPanel=b.dataset.p; showPanel(currentPanel);
+});
+document.getElementById('refresh').onclick=loadAll;
+
+function showPanel(p){
+  if(p==='respondents') renderRespondents();
+  else if(p==='aggregate') renderAggregate();
+  else if(p==='individual') renderIndividual();
+  else if(p==='opentext') renderOpenText();
+}
+
+/* ===== ① 응답자 현황 ===== */
+function renderRespondents(){
+  // 응답자별 이름/소속 + 진행률
+  const nameQ=DATA.qByCode['NAME'], affQ=DATA.qByCode['AFFIL'];
+  const textByResp={}; // resp -> {NAME,AFFIL}
+  DATA.flat.forEach(a=>{
+    if(a.question_code==='NAME') (textByResp[a.response_id]??={}).NAME=a.value_text;
+    if(a.question_code==='AFFIL')(textByResp[a.response_id]??={}).AFFIL=a.value_text;
+  });
+  // 진행률: 필수문항 대비 응답한 문항 수 (간이)
+  const reqCodes=DATA.qs.filter(q=>q.required).map(q=>q.id);
+  const answeredByResp={};
+  DATA.flat.forEach(a=>{(answeredByResp[a.response_id]??=new Set()).add(a.question_code);});
+  let rows=DATA.resps.map(r=>{
+    const t=textByResp[r.id]||{};
+    const answered=answeredByResp[r.id]?answeredByResp[r.id].size:0;
+    const pct=Math.min(100,Math.round(answered/DATA.qs.filter(q=>q.required).length*100));
+    return {name:t.NAME||'(미입력)',aff:t.AFFIL||'(미입력)',
+            status:r.status==='submitted'?'제출완료':'작성중',
+            pct, started:r.started_at, submitted:r.submitted_at};
+  });
+  rows.sort((a,b)=>new Date(b.started)-new Date(a.started));
+  let html=`<div class="card"><h2>응답자 명단 <span class="pill">${rows.length}명</span></h2>
+    <table><thead><tr><th>성명</th><th>소속</th><th>상태</th><th>진행률</th><th>시작</th><th>제출</th></tr></thead><tbody>`;
+  rows.forEach(r=>{
+    html+=`<tr><td>${esc(r.name)}</td><td>${esc(r.aff)}</td>
+      <td class="num">${r.status}</td>
+      <td class="barcell"><div class="fill" style="width:${r.pct}%"></div><span>${r.pct}%</span></td>
+      <td>${fmt(r.started)}</td><td>${r.submitted?fmt(r.submitted):'-'}</td></tr>`;
+  });
+  html+='</tbody></table></div>';
+  content.innerHTML=`<div class="panel active">${html}</div>`;
+}
+
+/* ===== ② 문항별 집계 ===== */
+function renderAggregate(){
+  let html='<div class="panel active">';
+  DATA.secs.forEach(sec=>{
+    const qsec=DATA.qsBySec[sec.id]||[];
+    if(!qsec.length) return;
+    html+=`<div class="card"><h2>${sec.ord}. ${esc(sec.title)}</h2>`;
+    qsec.forEach(q=>{ html+=aggregateQuestion(q); });
+    html+='</div>';
+  });
+  html+='</div>';
+  content.innerHTML=html;
+}
+function aggregateQuestion(q){
+  const fa=DATA.flat.filter(a=>a.question_code===q.code);
+  let h=`<h3>${labelNo(q)} ${esc(q.title)}</h3>`;
+  if(q.type==='single'||q.type==='multi'){
+    const cnt={}; const opts=DATA.optByQ[q.id]||[];
+    opts.forEach(o=>cnt[o.label]=0);
+    fa.forEach(a=>{if(a.option_label!=null)cnt[a.option_label]=(cnt[a.option_label]||0)+1;});
+    const max=Math.max(1,...Object.values(cnt));
+    h+='<table><thead><tr><th>선택지</th><th style="width:90px">응답수</th><th style="width:60px">비율</th></tr></thead><tbody>';
+    const tot=fa.length||1;
+    opts.forEach(o=>{const c=cnt[o.label]||0;
+      h+=`<tr><td class="barcell"><div class="fill" style="width:${c/max*100}%"></div><span>${esc(o.label)}</span></td><td class="num">${c}</td><td class="num">${Math.round(c/tot*100)}%</td></tr>`;});
+    h+='</tbody></table>';
+  } else if(q.type==='rank'){
+    // 1순위/2순위 각각 집계
+    const opts=DATA.optByQ[q.id]||[];
+    const c1={},c2={}; opts.forEach(o=>{c1[o.label]=0;c2[o.label]=0;});
+    fa.forEach(a=>{if(a.rank===1&&a.option_label!=null)c1[a.option_label]++;
+                   if(a.rank===2&&a.option_label!=null)c2[a.option_label]++;});
+    // 가중점수(1순위=2점,2순위=1점)로 정렬
+    const score=opts.map(o=>({label:o.label,s:(c1[o.label]||0)*2+(c2[o.label]||0),a:c1[o.label]||0,b:c2[o.label]||0}))
+                    .sort((x,y)=>y.s-x.s);
+    const max=Math.max(1,...score.map(s=>s.s));
+    h+='<table><thead><tr><th>선택지</th><th style="width:70px">1순위</th><th style="width:70px">2순위</th><th style="width:80px">가중점수</th></tr></thead><tbody>';
+    score.forEach(s=>{h+=`<tr><td class="barcell"><div class="fill" style="width:${s.s/max*100}%"></div><span>${esc(s.label)}</span></td><td class="num">${s.a}</td><td class="num">${s.b}</td><td class="num">${s.s}</td></tr>`;});
+    h+='</tbody></table><div class="muted" style="font-size:12px;margin-top:4px">※ 가중점수 = 1순위×2 + 2순위×1</div>';
+  } else if(q.type==='matrix_scale'){
+    const rows=DATA.rowByQ[q.id]||[], scs=DATA.scByQ[q.id]||[];
+    h+='<table><thead><tr><th>항목</th>';
+    scs.forEach(s=>h+=`<th style="width:90px">${esc(s.label)}<br><span class="muted" style="font-weight:400">평균</span></th>`);
+    h+='</tr></thead><tbody>';
+    rows.forEach(r=>{
+      h+=`<tr><td>${esc(r.label)}</td>`;
+      scs.forEach(s=>{
+        const vals=fa.filter(a=>a.row_label===r.label&&a.scale_label===s.label&&a.value_num!=null).map(a=>a.value_num);
+        const avg=vals.length?(vals.reduce((x,y)=>x+y,0)/vals.length):null;
+        h+=`<td class="num">${avg!=null?avg.toFixed(2):'-'}</td>`;
+      });
+      h+='</tr>';
+    });
+    h+='</tbody></table>';
+  } else if(q.type==='matrix_check_group'){
+    const rows=DATA.rowByQ[q.id]||[];
+    const cnt={}; rows.forEach(r=>cnt[r.label]=0);
+    fa.forEach(a=>{if(a.row_label!=null&&a.value_num)cnt[a.row_label]=(cnt[a.row_label]||0)+1;});
+    const max=Math.max(1,...Object.values(cnt));
+    h+='<table><thead><tr><th>지원방식</th><th style="width:90px">선택수</th></tr></thead><tbody>';
+    rows.forEach(r=>{const c=cnt[r.label]||0;h+=`<tr><td class="barcell"><div class="fill" style="width:${c/max*100}%"></div><span>${esc(r.label)}</span></td><td class="num">${c}</td></tr>`;});
+    h+='</tbody></table>';
+  } else if(q.type==='text'){
+    const n=fa.filter(a=>a.value_text&&a.value_text.trim()).length;
+    h+=`<div class="muted">서술형 응답 ${n}건 — ④ 서술형 응답 탭에서 확인</div>`;
+  }
+  return h;
+}
+
+/* ===== ③ 개별 응답 ===== */
+function renderIndividual(){
+  const nameByResp={};
+  DATA.flat.forEach(a=>{if(a.question_code==='NAME')nameByResp[a.response_id]=a.value_text;});
+  const list=DATA.resps.slice().sort((a,b)=>new Date(b.started_at)-new Date(a.started_at));
+  let opts=list.map((r,i)=>`<option value="${r.id}">${esc(nameByResp[r.id]||'(미입력)')} — ${r.status==='submitted'?'제출':'작성중'} (${fmt(r.started_at)})</option>`).join('');
+  content.innerHTML=`<div class="panel active"><div class="card">
+    <div class="toolbar"><span>응답자 선택:</span>
+      <select id="respsel">${opts||'<option>응답 없음</option>'}</select></div>
+    <div id="indiv"></div></div></div>`;
+  const sel=document.getElementById('respsel');
+  if(sel){sel.onchange=()=>showIndividual(sel.value); if(list.length)showIndividual(list[0].id);}
+}
+function showIndividual(rid){
+  const box=document.getElementById('indiv');
+  const mine=DATA.flat.filter(a=>a.response_id===rid);
+  let h='';
+  DATA.secs.forEach(sec=>{
+    const qsec=DATA.qsBySec[sec.id]||[];
+    h+=`<h3>${sec.ord}. ${esc(sec.title)}</h3>`;
+    qsec.forEach(q=>{
+      const fa=mine.filter(a=>a.question_code===q.code);
+      let ans='';
+      if(!fa.length) ans='<span class="muted">- 무응답</span>';
+      else if(q.type==='single'||q.type==='multi') ans=fa.map(a=>esc(a.option_label)+(a.value_text?` (${esc(a.value_text)})`:'')).join(', ');
+      else if(q.type==='rank') ans=fa.filter(a=>a.rank).sort((a,b)=>a.rank-b.rank).map(a=>`${a.rank}순위: ${esc(a.option_label)}`).join(' / ');
+      else if(q.type==='text') ans=esc(fa[0].value_text||'');
+      else if(q.type==='matrix_scale') ans=`<span class="muted">${fa.filter(a=>a.value_num).length}개 항목 응답</span>`;
+      else if(q.type==='matrix_check_group') ans=`<span class="muted">${fa.filter(a=>a.value_num).length}개 체크</span>`;
+      h+=`<div style="padding:6px 0;border-bottom:1px solid #eef3f1"><b>${labelNo(q)}</b> ${esc(q.title)}<br>${ans}</div>`;
+    });
+  });
+  box.innerHTML=h;
+}
+
+/* ===== ④ 서술형 응답 ===== */
+function renderOpenText(){
+  const textQs=DATA.qs.filter(q=>q.type==='text'&&q.code!=='NAME'&&q.code!=='AFFIL');
+  const nameByResp={};
+  DATA.flat.forEach(a=>{if(a.question_code==='NAME')nameByResp[a.response_id]=a.value_text;});
+  let html='<div class="panel active">';
+  textQs.forEach(q=>{
+    const items=DATA.flat.filter(a=>a.question_code===q.code&&a.value_text&&a.value_text.trim());
+    html+=`<div class="card"><h2>${labelNo(q)} ${esc(q.title)} <span class="pill">${items.length}건</span></h2>`;
+    if(!items.length) html+='<div class="muted">응답 없음</div>';
+    items.forEach(a=>{html+=`<div class="open-item"><div class="meta">${esc(nameByResp[a.response_id]||'(미입력)')}</div>${esc(a.value_text)}</div>`;});
+    html+='</div>';
+  });
+  html+='</div>';
+  content.innerHTML=html;
+}
+
+/* ===== 엑셀 다운로드 ===== */
+document.getElementById('xlsx').onclick=()=>{
+  const wb=XLSX.utils.book_new();
+  // 시트1: 응답자 명단
+  const nameByResp={},affByResp={};
+  DATA.flat.forEach(a=>{if(a.question_code==='NAME')nameByResp[a.response_id]=a.value_text;
+                        if(a.question_code==='AFFIL')affByResp[a.response_id]=a.value_text;});
+  const s1=[['성명','소속','상태','시작','제출']];
+  DATA.resps.forEach(r=>s1.push([nameByResp[r.id]||'',affByResp[r.id]||'',
+    r.status==='submitted'?'제출완료':'작성중',fmt(r.started_at),r.submitted_at?fmt(r.submitted_at):'']));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(s1),'응답자명단');
+  // 시트2: 전체 응답(long) — 사람이 읽는 형태
+  const s2=[['응답ID','성명','섹션','문항코드','문항','행','척도','선택지','순위','점수','서술']];
+  DATA.flat.forEach(a=>s2.push([a.response_id,nameByResp[a.response_id]||'',a.section_title,
+    a.question_code,a.question_title,a.row_label||'',a.scale_label||'',a.option_label||'',
+    a.rank||'',a.value_num||'',a.value_text||'']));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(s2),'전체응답');
+  XLSX.writeFile(wb,`전문가조사_응답_${new Date().toISOString().slice(0,10)}.xlsx`);
+};
+
+/* ===== util ===== */
+function labelNo(q){const m=(q.code||'').match(/^Q(\d+)/);return m?m[0]+'.':(q.code||'');}
+function esc(s){return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function fmt(t){if(!t)return'-';const d=new Date(t);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
+
+loadAll().catch(e=>{content.innerHTML=`<div class="card" style="color:#c62828">오류: ${e.message}<br><br>
+  <b>응답 데이터 읽기 권한이 없으면 이 오류가 납니다.</b><br>05_dashboard_access.sql 을 먼저 실행했는지 확인하세요.</div>`;});
+</script>
+</body>
+</html>
