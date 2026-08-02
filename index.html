@@ -120,6 +120,9 @@
   textarea{width:100%; border:1.5px solid var(--line); border-radius:8px; padding:11px 13px;
            font-family:inherit; font-size:13.5px; resize:vertical; min-height:70px;}
   textarea:focus{outline:none; border-color:var(--green-2);}
+  .short-text{width:100%; max-width:480px; border:1.5px solid var(--line); border-radius:8px;
+              padding:12px 15px; font-family:inherit; font-size:16.5px;}
+  .short-text:focus{outline:none; border-color:var(--green-2);}
 
   /* 조건부 숨김 */
   .conditional-hidden{display:none;}
@@ -222,6 +225,7 @@ async function load(){
 // ============ 렌더 전체 ============
 function render(secs){
   app.innerHTML='';
+  assignNumbers(secs);
   app.appendChild(node('div','intro',null,survey_intro()));
   app.appendChild(node('div','pcnote','','이 설문은 표 문항이 많아 <b>PC 화면</b>에서 응답하시길 권장합니다. 응답은 자동 저장되며, 같은 기기에서 이어서 작성할 수 있습니다.'));
   secs.forEach(sec=>{
@@ -250,7 +254,8 @@ function survey_intro(){return esc(META.survey.intro||'');}
 function buildQuestion(q){
   const card=node('div','qcard'); card.id='q_'+q.code; card._q=q;
   const req=q.required?'<span class="req">*</span>':'';
-  card.innerHTML=`<div class="qcode">${qLabel(q)}</div><div class="qtitle">${esc(q.title)}${req}</div>`
+  const _lab=qLabel(q);
+  card.innerHTML=(_lab?`<div class="qcode">${_lab}</div>`:'')+`<div class="qtitle">${esc(q.title)}${req}</div>`
     +(q.note?`<div class="qnote">${esc(q.note)}</div>`:'');
   const body=node('div','qbody'); card.appendChild(body);
   const R=META.R[q.id]||[], O=META.O[q.id]||[], SC=META.SC[q.id]||[];
@@ -264,10 +269,17 @@ function buildQuestion(q){
   if(q.depends_on) registerConditional(q,card);
   return card;
 }
-function qLabel(q){ // Q12, S13-A1 등에서 사람이 읽는 번호
-  const m=q.code.match(/^Q(\d+)/); if(m) return m[0]+'번';
-  return q.code;
+let _qnum=0; const _qnumMap={};
+function assignNumbers(secs){ // 렌더 순서대로 주요 문항에 연속 번호 부여
+  _qnum=0;
+  secs.forEach(sec=>{(META.qsBySec[sec.id]||[]).forEach(q=>{
+    // 이름/소속은 번호 없음, 매트릭스 세부/서술형 하위문항도 자체 라벨 사용
+    if(q.code==='NAME'||q.code==='AFFIL'){_qnumMap[q.code]='';return;}
+    if(/^Q\d/.test(q.code)){ _qnum++; _qnumMap[q.code]=_qnum+'번'; }
+    else { _qnumMap[q.code]=''; } // S13-*, S14-*, S15-* 등은 문항 제목에 자체 번호 있음
+  });});
 }
+function qLabel(q){ return _qnumMap[q.code]||''; }
 
 // ---- single ----
 function isShortSet(O){ // 선택지가 짧으면(기타 제외 25자 이하, 기타는 짧게) 그리드 배치
@@ -415,6 +427,12 @@ function buildRankDropdown(q,O,body){
 }
 // ---- text ----
 function buildText(q,body){
+  if(q.config?.short){
+    const inp=node('input','short-text'); inp.type='text';
+    inp.placeholder=q.config.placeholder||'입력해 주십시오.';
+    inp.oninput=()=>{A[q.code]={text:inp.value}; onAnswer(q,false);};
+    body.appendChild(inp); return;
+  }
   const ta=node('textarea'); ta.placeholder='자유롭게 작성해 주십시오.';
   ta.oninput=()=>{A[q.code]={text:ta.value}; onAnswer(q,false);};
   body.appendChild(ta);
@@ -649,6 +667,11 @@ function reflectAll(){
       if(tb)[...tb.querySelectorAll('.rankbtn')].forEach(g=>{
         g.querySelector('.b1').className='b1'+(rk[g._code]===1?' r1':'');
         g.querySelector('.b2').className='b2'+(rk[g._code]===2?' r2':'');});
+    }
+    // text/short-text 본문 복원
+    if(q.type==='text'&&v.text){
+      const inp=document.querySelector(`#q_${code} .short-text, #q_${code} textarea`);
+      if(inp) inp.value=v.text;
     }
     // 기타(___) 직접입력 텍스트 복원 (single/multi/rank 공통)
     if(A[code+'.text']){
