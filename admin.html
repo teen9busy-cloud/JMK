@@ -90,13 +90,14 @@ async function loadAll(){
   const secIds=secs.map(s=>s.id);
   const {data:qs}=await sb.from('questions').select('*').in('section_id',secIds).order('ord');
   const qIds=qs.map(q=>q.id);
-  const [{data:opts},{data:rows},{data:scales},{data:resps},{data:flat}]=await Promise.all([
+  const [{data:opts},{data:rows},{data:scales},{data:resps}]=await Promise.all([
     sb.from('options').select('*').in('question_id',qIds).order('ord'),
     sb.from('matrix_rows').select('*').in('question_id',qIds).order('ord'),
     sb.from('scales').select('*').in('question_id',qIds).order('ord'),
     sb.from('responses').select('*').eq('survey_id',survey.id).order('started_at'),
-    sb.from('v_answers_flat').select('*'),
   ]);
+  // v_answers_flat 은 응답이 쌓이면 수천~수만 행이 되므로 1000행씩 나눠 전량 로드
+  const flat=await fetchAll('v_answers_flat');
   DATA={survey,secs,qs,opts:opts||[],rows:rows||[],scales:scales||[],
         resps:resps||[],flat:flat||[]};
   // 인덱스
@@ -317,6 +318,18 @@ document.getElementById('xlsx').onclick=()=>{
 };
 
 /* ===== util ===== */
+// 1000행 제한을 넘기 위해 range 로 나눠 전량 로드
+async function fetchAll(table){
+  const page=1000; let from=0; let out=[];
+  while(true){
+    const {data,error}=await sb.from(table).select('*').range(from,from+page-1);
+    if(error) throw error;
+    out=out.concat(data||[]);
+    if(!data || data.length<page) break;
+    from+=page;
+  }
+  return out;
+}
 function labelNo(q){const m=(q.code||'').match(/^Q(\d+)/);return m?m[0]+'.':(q.code||'');}
 function esc(s){return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function fmt(t){if(!t)return'-';const d=new Date(t);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
